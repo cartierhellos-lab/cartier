@@ -144,23 +144,36 @@ async function renderDashboard() {
 // ============================================================
 // 账号列表（云控 PhoneInfo）
 // ============================================================
+// ============================================================
+// 账号列表 (cloud_phoneinfo)
+// ============================================================
 let accountPage = 1, accountFilter = {};
+
 async function renderAccounts() {
   setPageTitle('账号列表');
+  // 加载项目列表供筛选和表单使用
+  await loadProjectOptions();
+
   document.getElementById('header-actions').innerHTML = `
+    <button class="btn btn-secondary btn-sm" onclick="openImportModal()">📤 导入账号</button>
     <button class="btn btn-secondary btn-sm" onclick="exportAccounts()">📥 导出</button>
     <button class="btn btn-danger btn-sm" id="batch-del-acc" onclick="batchDeleteAccounts()" disabled>批量删除</button>
     <button class="btn btn-primary btn-sm" onclick="showAccountForm()">+ 添加账号</button>`;
 
+  const projectOpts = buildProjectOptions('', true);
+
   document.getElementById('content').innerHTML = `
     <div class="card">
       <div class="filter-bar">
-        <input id="acc-filter-phone" placeholder="手机号搜索" style="max-width:160px;" value="${accountFilter.phone||''}"/>
-        <select id="acc-filter-status" style="max-width:120px;">
+        <input id="acc-filter-keyword" placeholder="账号/邮箱搜索" style="max-width:180px;" value="${accountFilter.keyword||''}"/>
+        <select id="acc-filter-online" style="max-width:110px;">
           <option value="">全部状态</option>
-          <option value="1" ${accountFilter.status=='1'?'selected':''}>正常</option>
-          <option value="0" ${accountFilter.status=='0'?'selected':''}>禁用</option>
-          <option value="2" ${accountFilter.status=='2'?'selected':''}>风险</option>
+          <option value="1" ${accountFilter.online_status=='1'?'selected':''}>在线</option>
+          <option value="0" ${accountFilter.online_status=='0'?'selected':''}>离线</option>
+        </select>
+        <select id="acc-filter-project" style="max-width:130px;">
+          <option value="">全部项目</option>
+          ${projectOpts}
         </select>
         <button class="btn btn-secondary btn-sm" onclick="searchAccounts()">🔍 搜索</button>
         <button class="btn btn-secondary btn-sm" onclick="resetAccountFilter()">重置</button>
@@ -173,10 +186,21 @@ async function renderAccounts() {
           <thead>
             <tr>
               <th class="table-check"><input type="checkbox" onchange="toggleAllCheck(this,'acc-table')"/></th>
-              <th>ID</th><th>手机号</th><th>项目</th><th>状态</th><th>创建时间</th><th>操作</th>
+              <th>#</th>
+              <th>账号 (邮箱)</th>
+              <th>手机号</th>
+              <th>用户名</th>
+              <th>账号类型</th>
+              <th>状态</th>
+              <th>在线状态</th>
+              <th>项目</th>
+              <th>发送次数</th>
+              <th>最后发送</th>
+              <th>创建时间</th>
+              <th>操作</th>
             </tr>
           </thead>
-          <tbody id="acc-tbody"><tr class="loading-row"><td colspan="7">加载中...</td></tr></tbody>
+          <tbody id="acc-tbody"><tr class="loading-row"><td colspan="13">加载中...</td></tr></tbody>
         </table>
       </div>
       <div id="acc-pagination"></div>
@@ -185,24 +209,72 @@ async function renderAccounts() {
   await loadAccounts();
 }
 
+// 加载项目选项到全局缓存
+let _projectCache = [];
+async function loadProjectOptions() {
+  try {
+    const res = await API.Projects.list({ page: 1, pageSize: 100 });
+    const items = res?.data?.items || res?.data?.list || res?.data?.rows || [];
+    _projectCache = Array.isArray(items) ? items : [];
+  } catch (e) {
+    _projectCache = [];
+  }
+}
+
+function buildProjectOptions(selectedId, skipFirst) {
+  return _projectCache.map(p =>
+    `<option value="${p.id}" ${String(p.id)===String(selectedId)?'selected':''}>${p.project_name||p.name||'项目'+p.id}</option>`
+  ).join('');
+}
+
+function getProjectName(projectId) {
+  if (!projectId) return '-';
+  const p = _projectCache.find(x => String(x.id) === String(projectId));
+  return p ? (p.project_name || p.name || '项目'+p.id) : ('#'+projectId);
+}
+
 async function loadAccounts() {
   const res = await API.Accounts.list({ page: accountPage, pageSize: 20, ...accountFilter });
   const items = res?.data?.items || [];
   const total = res?.data?.total || 0;
 
-  document.getElementById('acc-tbody').innerHTML = items.length ? items.map(a => `
-    <tr>
-      <td><input type="checkbox" value="${a.id}" onchange="updateBatchBtn('acc-table','batch-del-acc')"/></td>
-      <td>${a.id}</td>
-      <td style="font-family:monospace;">${a.system_phonenumber || a.phone || '-'}</td>
-      <td>${a.project_key || '-'}</td>
-      <td>${accountStatusBadge(a.status)}</td>
-      <td>${fmtDate(a.created_at)}</td>
-      <td>
-        <button class="btn btn-sm btn-secondary" onclick="editAccount(${JSON.stringify(a).replace(/"/g,'&quot;')})">编辑</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteAccount(${a.id})">删除</button>
-      </td>
-    </tr>`).join('') : `<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text-muted);">暂无数据</td></tr>`;
+  if (!items.length) {
+    document.getElementById('acc-tbody').innerHTML =
+      `<tr><td colspan="13" style="text-align:center;padding:32px;color:var(--text-muted);">暂无数据</td></tr>`;
+  } else {
+    document.getElementById('acc-tbody').innerHTML = items.map((a, idx) => {
+      const statusBadge = a.status == 1
+        ? `<span class="badge badge-green">正常</span>`
+        : `<span class="badge badge-red">禁用</span>`;
+      const onlineBadge = a.online_status == 1
+        ? `<span class="badge badge-green">在线</span>`
+        : `<span class="badge badge-gray">离线</span>`;
+      const typeBadge = a.account_type === 'tn'
+        ? `<span class="badge badge-blue">TN</span>`
+        : a.account_type === 'tw'
+          ? `<span class="badge badge-purple">TW</span>`
+          : `<span class="badge badge-gray">${a.account_type||'-'}</span>`;
+      const safeJson = JSON.stringify(a).replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      return `<tr>
+        <td><input type="checkbox" value="${a.id}" onchange="updateBatchBtn('acc-table','batch-del-acc')"/></td>
+        <td style="color:var(--text-muted);">${(accountPage-1)*20+idx+1}</td>
+        <td style="font-family:monospace;font-size:12px;color:var(--accent-hover);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${a.myphonenumber||''}">${a.myphonenumber||'-'}</td>
+        <td style="font-family:monospace;">${a.phone||'-'}</td>
+        <td>${a.user_name||'-'}</td>
+        <td>${typeBadge}</td>
+        <td>${statusBadge}</td>
+        <td>${onlineBadge}</td>
+        <td>${getProjectName(a.project_id)}</td>
+        <td style="text-align:center;">${a.send_count||0}</td>
+        <td style="font-size:11px;color:var(--text-muted);">${fmtDate(a.last_send_at)}</td>
+        <td style="font-size:11px;color:var(--text-muted);">${fmtDate(a.created_at)}</td>
+        <td>
+          <button class="btn btn-sm btn-secondary" style="font-size:11px;padding:2px 8px;" onclick="editAccount(${safeJson})">编辑</button>
+          <button class="btn btn-sm btn-danger" style="font-size:11px;padding:2px 8px;" onclick="deleteAccount(${a.id})">删除</button>
+        </td>
+      </tr>`;
+    }).join('');
+  }
 
   document.getElementById('acc-pagination').innerHTML = paginationHtml(accountPage, total, 20);
   window.changePage = (p) => { if(p<1||p>Math.ceil(total/20))return; accountPage=p; loadAccounts(); };
@@ -211,69 +283,209 @@ async function loadAccounts() {
 function searchAccounts() {
   accountPage = 1;
   accountFilter = {
-    system_phonenumber: document.getElementById('acc-filter-phone').value.trim() || undefined,
-    status: document.getElementById('acc-filter-status').value || undefined,
+    keyword: document.getElementById('acc-filter-keyword').value.trim() || undefined,
+    online_status: document.getElementById('acc-filter-online').value || undefined,
+    project_id: document.getElementById('acc-filter-project').value || undefined,
   };
   loadAccounts();
 }
 function resetAccountFilter() { accountFilter = {}; accountPage = 1; renderAccounts(); }
 
 function showAccountForm(acc = null) {
+  const isEdit = !!(acc && acc.id);
+  const projectOpts = buildProjectOptions(acc?.project_id || '');
   const html = `
-    <div class="form-group"><label class="form-label required">手机号</label>
-      <input id="af-phone" value="${acc?.system_phonenumber||acc?.phone||''}"/></div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">项目KEY</label>
-        <input id="af-project" value="${acc?.project_key||''}"/></div>
-      <div class="form-group"><label class="form-label">状态</label>
-        <select id="af-status">
-          <option value="1" ${acc?.status==1?'selected':''}>正常</option>
+      <div class="form-group" style="flex:2;">
+        <label class="form-label required">账号 (邮箱/myphonenumber)</label>
+        <input id="af-myphone" class="input" value="${acc?.myphonenumber||''}" placeholder="例: user@outlook.com"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">手机号</label>
+        <input id="af-phone" class="input" value="${acc?.phone||''}" placeholder="例: 12179316771"/>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">用户名</label>
+        <input id="af-username" class="input" value="${acc?.user_name||''}"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">账号类型</label>
+        <select id="af-type" class="input">
+          <option value="tn" ${acc?.account_type==='tn'||!acc?'selected':''}>TextNow (tn)</option>
+          <option value="tw" ${acc?.account_type==='tw'?'selected':''}>TextWeb (tw)</option>
+          <option value="other" ${acc?.account_type==='other'?'selected':''}>其他</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">状态</label>
+        <select id="af-status" class="input">
+          <option value="1" ${acc?.status==1||!acc?'selected':''}>正常</option>
           <option value="0" ${acc?.status==0?'selected':''}>禁用</option>
-        </select></div>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">在线状态</label>
+        <select id="af-online" class="input">
+          <option value="0" ${acc?.online_status==0||!acc?'selected':''}>离线</option>
+          <option value="1" ${acc?.online_status==1?'selected':''}>在线</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">所属项目</label>
+        <select id="af-project" class="input">
+          <option value="">无</option>
+          ${projectOpts}
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">是否客服</label>
+        <select id="af-service" class="input">
+          <option value="0" ${!acc?.is_service?'selected':''}>否</option>
+          <option value="1" ${acc?.is_service==1?'selected':''}>是</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Cookie</label>
+      <textarea id="af-cookie" class="input" rows="2" style="font-family:monospace;font-size:11px;">${acc?.cookie||''}</textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Device Info (JSON)</label>
+      <textarea id="af-device" class="input" rows="3" style="font-family:monospace;font-size:11px;">${acc?.device_info||''}</textarea>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">IDFA</label>
+        <input id="af-idfa" class="input" value="${acc?.idfa||''}"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Client ID</label>
+        <input id="af-client" class="input" value="${acc?.client_id||''}"/>
+      </div>
     </div>`;
-  showModal(acc ? '编辑账号' : '添加账号', html, async (mid) => {
+
+  showModal(isEdit ? '编辑账号' : '添加账号', html, async (mid) => {
+    const myphonenumber = document.getElementById('af-myphone').value.trim();
+    if (!myphonenumber) { toast('账号(邮箱)不能为空', 'error'); return; }
     const data = {
-      system_phonenumber: document.getElementById('af-phone').value.trim(),
-      project_key: document.getElementById('af-project').value.trim() || undefined,
+      myphonenumber,
+      phone: document.getElementById('af-phone').value.trim() || null,
+      user_name: document.getElementById('af-username').value.trim() || null,
+      account_type: document.getElementById('af-type').value,
       status: +document.getElementById('af-status').value,
+      online_status: +document.getElementById('af-online').value,
+      project_id: document.getElementById('af-project').value || null,
+      is_service: +document.getElementById('af-service').value,
+      cookie: document.getElementById('af-cookie').value.trim() || null,
+      device_info: document.getElementById('af-device').value.trim() || null,
+      idfa: document.getElementById('af-idfa').value.trim() || null,
+      client_id: document.getElementById('af-client').value.trim() || null,
     };
-    if (acc?.id) data.id = acc.id;
-    if (!data.system_phonenumber) { toast('手机号不能为空', 'error'); return; }
+    if (isEdit) data.id = acc.id;
     const res = await API.Accounts.save(data);
     if (res?.success) { toast('保存成功', 'success'); closeModal(mid); loadAccounts(); }
     else toast(res?.message || '保存失败', 'error');
-  });
+  }, { confirmText: isEdit ? '保存修改' : '添加' });
 }
 
-function editAccount(a) { showAccountForm(a); }
+function editAccount(a) { loadProjectOptions().then(() => showAccountForm(a)); }
+
 async function deleteAccount(id) {
   if (!await confirm('此操作将永久删除该账号，是否继续？')) return;
   const res = await API.Accounts.delete([id]);
   if (res?.success) { toast('删除成功', 'success'); loadAccounts(); }
-  else toast('删除失败', 'error');
+  else toast(res?.message || '删除失败', 'error');
 }
+
 async function batchDeleteAccounts() {
   const ids = getChecked(document.getElementById('acc-table'));
   if (!ids.length) return;
   if (!await confirm(`确认删除选中的 ${ids.length} 条账号？`)) return;
   const res = await API.Accounts.delete(ids);
   if (res?.success) { toast('批量删除成功', 'success'); loadAccounts(); }
+  else toast(res?.message || '批量删除失败', 'error');
 }
+
 async function batchToggleAccStatus(status) {
   const ids = getChecked(document.getElementById('acc-table'));
   if (!ids.length) { toast('请先选择账号', 'error'); return; }
   const res = await API.Accounts.updateStatus(ids, status);
   if (res?.success) { toast(status ? '批量启用成功' : '批量禁用成功', 'success'); loadAccounts(); }
-}
-async function exportAccounts() {
-  const blob = await API.Accounts.export();
-  downloadBlob(blob, `accounts_${Date.now()}.json`);
+  else toast(res?.message || '操作失败', 'error');
 }
 
-// ============================================================
-// 项目管理
-// ============================================================
-let projPage = 1;
+async function exportAccounts() {
+  try {
+    const token = localStorage.getItem('token');
+    const resp = await fetch('/prod/cloud/phoneinfo/export', {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!resp.ok) { toast('导出失败', 'error'); return; }
+    const blob = await resp.blob();
+    const contentDisp = resp.headers.get('content-disposition') || '';
+    let filename = 'accounts_export.csv';
+    const match = contentDisp.match(/filename[^;=\n]*=(['"]*)(.*?)\1/);
+    if (match) filename = match[2];
+    downloadBlob(blob, filename || `accounts_${Date.now()}.csv`);
+    toast('导出成功', 'success');
+  } catch(e) {
+    toast('导出请求失败', 'error');
+  }
+}
+
+function openImportModal() {
+  const html = `
+    <div style="margin-bottom:12px;color:var(--text-secondary);font-size:13px;">
+      支持上传 <strong>.xlsx</strong> / <strong>.csv</strong> 格式的账号文件，请按以下格式准备数据：
+    </div>
+    <div style="background:var(--bg-secondary);border-radius:6px;padding:12px;font-family:monospace;font-size:12px;margin-bottom:12px;">
+      <div style="color:var(--text-muted);margin-bottom:6px;">CSV/Excel 列格式示例：</div>
+      <code style="color:var(--accent-hover);">myphonenumber,phone,user_name,account_type,cookie</code><br/>
+      <code style="color:var(--text-secondary);">user@outlook.com,12179316771,username,tn,[cookie值]</code>
+    </div>
+    <div id="import-file-area" style="border:2px dashed var(--border);border-radius:8px;padding:24px;text-align:center;cursor:pointer;" onclick="document.getElementById('import-file-input').click()">
+      <div style="font-size:32px;margin-bottom:8px;">📁</div>
+      <div id="import-file-name" style="color:var(--text-muted);">点击选择文件或拖拽至此</div>
+    </div>
+    <input id="import-file-input" type="file" accept=".xlsx,.csv,.xls" style="display:none;" onchange="onImportFileChange(this)"/>
+    <div id="import-result" style="margin-top:8px;"></div>`;
+
+  showModal('导入账号', html, async (mid) => {
+    const fileInput = document.getElementById('import-file-input');
+    if (!fileInput.files.length) { toast('请先选择文件', 'error'); return; }
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+    document.getElementById('import-result').innerHTML = '<span style="color:var(--text-muted);">正在上传...</span>';
+    try {
+      const res = await API.Accounts.import(formData);
+      if (res?.success || res?.code === 200) {
+        toast(res?.message || '导入成功', 'success');
+        closeModal(mid);
+        await loadAccounts();
+      } else {
+        document.getElementById('import-result').innerHTML = `<span style="color:var(--danger);">${res?.message||'导入失败'}</span>`;
+      }
+    } catch(e) {
+      document.getElementById('import-result').innerHTML = `<span style="color:var(--danger);">请求失败: ${e.message}</span>`;
+    }
+  }, { confirmText: '开始导入' });
+}
+
+function onImportFileChange(input) {
+  const f = input.files[0];
+  if (f) {
+    document.getElementById('import-file-name').textContent = `已选择: ${f.name}`;
+    document.getElementById('import-file-area').style.borderColor = 'var(--accent)';
+  }
+}
+
+
 async function renderProjects() {
   setPageTitle('项目管理');
   document.getElementById('header-actions').innerHTML = `
@@ -966,6 +1178,8 @@ window.editAccount = editAccount;
 window.deleteAccount = deleteAccount;
 window.batchDeleteAccounts = batchDeleteAccounts;
 window.batchToggleAccStatus = batchToggleAccStatus;
+window.openImportModal = openImportModal;
+window.onImportFileChange = onImportFileChange;
 window.exportAccounts = exportAccounts;
 window.showProjectForm = showProjectForm;
 window.editProject = editProject;

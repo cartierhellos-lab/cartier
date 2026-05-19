@@ -216,3 +216,17 @@ thead th:first-child, tbody td:first-child { padding-left: 20px; }
 .mb-1 { margin-bottom: 8px; }
 .mb-4 { margin-bottom: 16px; }
 .hidden { display: none !important; }
+
+/* ========= Badge 颜色别名 ========= */
+.badge-green { background: rgba(63,185,80,.12); color: var(--success); }
+.badge-green::before { background: var(--success); }
+.badge-red { background: rgba(248,81,73,.12); color: var(--danger); }
+.badge-red::before { background: var(--danger); }
+.badge-gray { background: rgba(110,118,129,.12); color: var(--text-muted); }
+.badge-gray::before { background: var(--text-muted); }
+.badge-blue { background: rgba(88,166,255,.12); color: var(--info); }
+.badge-blue::before { background: var(--info); }
+.badge-purple { background: rgba(163,113,247,.12); color: #a371f7; }
+.badge-purple::before { background: #a371f7; }
+.badge-yellow { background: rgba(210,153,34,.12); color: var(--warning); }
+.badge-yellow::before { background: var(--warning); }
